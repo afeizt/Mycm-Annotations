@@ -1,0 +1,40 @@
+{
+	"name": "mycm/annotations",
+	"description": "基于 PHP 8 原生 Attribute 的控制器注解扫描器，兼容旧版 DocBlock 格式。零外部依赖，可独立作为 Composer 包发布使用。",
+	"type": "library",
+	"license": "MIT",
+	"keywords": [
+		"annotation",
+		"controller",
+		"scanner",
+		"php8",
+		"attribute",
+		"thinkphp",
+		"docblock",
+		"node"
+	],
+	"require": {
+		"php": ">=8.0",
+		"ext-tokenizer": "*"
+	},
+	"autoload": {
+		"psr-4": {
+			"Mycm\\Annotations\\": "src/"
+		}
+	},
+	"autoload-dev": {
+		"psr-4": {
+			"Mycm\\Annotations\\Tests\\": "tests/"
+		}
+	},
+	"authors": [
+		{
+			"name": "afeizt@hotmail.com",
+			"email": "afeizt@163.com"
+		}
+	],
+	"minimum-stability": "stable",
+	"suggest": {
+		"ext-reflection": "PHP 反射扩展，用于读取 PHP 8 原生 Attributes（通常已内置）"
+	}
+}
