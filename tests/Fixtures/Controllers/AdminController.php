@@ -2,30 +2,20 @@
 
 namespace Mycm\Annotations\Tests\Fixtures\Controllers;
 
-/**
- * Class Admin
- * @package app\admin\controller\system
- * @ControllerAnnotation(title="管理员管理")
- *
- * 使用旧版 DocBlock 注解的控制器示例（兼容模式）
- */
+use Mycm\Annotations\Attributes\Controller;
+use Mycm\Annotations\Attributes\Node;
+
+#[Controller(title: '管理员管理')]
 class AdminController
 {
-	/**
-	 * @NodeAnotation(title="列表")
-	 */
+	#[Node(title: '列表')]
 	public function index(): void {}
 
-	/**
-	 * @NodeAnotation(title="新增")
-	 */
+	#[Node(title: '新增')]
 	public function add(): void {}
 
-	/**
-	 * @NodeAnotation(title="删除", is_auth=0)
-	 */
+	#[Node(title: '删除', is_auth: false)]
 	public function delete(): void {}
 
-	// 没有注解的方法，不会被识别为节点
 	public function _before_index(): void {}
 }

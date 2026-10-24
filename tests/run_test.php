@@ -5,9 +5,8 @@
  *
  * 测试内容：
  * 1. PHP 8 原生 Attribute 格式
- * 2. 旧版 DocBlock 兼容格式
- * 3. 混合模式（Attribute 优先）
- * 4. 排除规则
+ * 2. 排除规则
+ * 3. 多应用扫描
  */
 
 // 手动注册 autoloader（模拟实际项目中的 composer autoload）
@@ -113,20 +112,20 @@ printf("_before_index 不应出现在节点中: %s (正确应为 false)\n", $has
 
 echo "\n";
 
-// 测试 6：PHP 8 Attribute 优先级验证
-echo "[Test 6] Attribute 优先级验证\n";
+// 测试 6：PHP 8 Attribute 数据验证
+echo "[Test 6] Attribute 数据验证\n";
 echo "----------------------------------------\n";
 $configCtrl = $scanner->getController('Mycm\Annotations\Tests\Fixtures\Controllers\ConfigController');
 foreach ($configCtrl->nodes as $node) {
 	if ($node->methodName === 'index') {
-		printf("index 方法标题: [%s] (期望: 系统配置, 不应是: 旧版标题-会被忽略)\n", $node->title);
+		printf("index 方法标题: [%s] (期望: 系统配置)\n", $node->title);
 	}
 	if ($node->methodName === 'mail') {
-		printf("mail 方法标题: [%s] (期望: 邮件设置, 来自 DocBlock 回退)\n", $node->title);
+		printf("mail 方法标题: [%s] (期望: 邮件设置)\n", $node->title);
 	}
 }
 
-// 测试 6b：NodeInfo.isAuth 和 NodeInfo.getNode() 验证
+// 测试 NodeInfo.isAuth 和 NodeInfo.getNode()
 echo "\n[Test 6b] NodeInfo isAuth 与 getNode()\n";
 echo "----------------------------------------\n";
 $userCtrl = $scanner->getController('Mycm\Annotations\Tests\Fixtures\Controllers\UserController');
@@ -143,7 +142,7 @@ foreach ($userCtrl->nodes as $node) {
 $adminCtrl2 = $scanner->getController('Mycm\Annotations\Tests\Fixtures\Controllers\AdminController');
 foreach ($adminCtrl2->nodes as $node) {
 	if ($node->methodName === 'delete') {
-		printf("delete: isAuth = %s (期望: false, DocBlock is_auth=0)\n", $node->isAuth ? 'true' : 'false');
+		printf("delete: isAuth = %s (期望: false, Attribute is_auth: false)\n", $node->isAuth ? 'true' : 'false');
 	}
 	if ($node->methodName === 'index') {
 		printf("index: isAuth = %s (期望: true, 默认值)\n", $node->isAuth ? 'true' : 'false');

@@ -8,7 +8,7 @@ use Attribute;
  * 节点/方法注解 - PHP 8 原生 Attribute
  *
  * 用于标记控制器中的方法为功能节点，并提供节点标题信息。
- * 兼容旧版 @NodeAnotation(title="...") DocBlock 格式。
+ * 兼容旧版 @NodeAnnotation(title="...") DocBlock 格式。
  *
  * 用法：
  *   #[Node(title: "列表")]

@@ -1,16 +1,21 @@
 # MycmAnnotations
 
-基于 PHP 8 原生 Attribute 的控制器注解扫描器，兼容旧版 DocBlock 格式。
-
-零外部依赖，可独立作为 Composer 包发布使用。
+基于 PHP 8 原生 Attribute 的控制器注解扫描器，零外部依赖。
 
 ## 特性
 
-- **PHP 8 原生 Attribute**：使用 `#[Controller]` / `#[Node]` 标记控制器和方法
-- **向后兼容**：自动识别旧版 `@ControllerAnnotation` / `@NodeAnotation` DocBlock 格式
-- **智能优先级**：同时存在时，PHP 8 Attribute 优先于 DocBlock
-- **零外部依赖**：仅需 PHP 8.0 + `ext-tokenizer`（内置扩展）
-- **PSR-4 自动加载**：标准 Composer 包，安装即用
+- **纯 PHP 8 Attribute**：使用 `#[Controller]` / `#[Node]` 标记控制器和方法
+- **零依赖**：不依赖 `doctrine/annotations` 或任何第三方包
+- **高性能**：基于 Reflection API 直接读取 Attribute，无需解析 DocBlock
+- **多应用支持**：通过 `AnnotationManager` 同时管理多个应用的控制器扫描
+- **节点扁平化**：`getAllNodes()` 将控制器节点（type=1）和方法节点（type=2）合并为统一列表
+- **Token 解析**：先从文件 token 提取命名空间/类名，再按需反射，避免不必要的类加载
+
+## 环境要求
+
+- PHP >= 8.0
+- ext-tokenizer
+- ext-reflection（通常已内置）
 
 ## 安装
 
@@ -20,255 +25,218 @@ composer require mycm/annotations
 
 ## 快速开始
 
-### 1. 在控制器中标记注解
-
-**新版 PHP 8 Attribute 方式（推荐）：**
+### 1. 定义控制器
 
 ```php
 <?php
+
 namespace app\admin\controller;
 
 use Mycm\Annotations\Attributes\Controller;
 use Mycm\Annotations\Attributes\Node;
 
-#[Controller(title: "管理员管理")]
-class Admin
+#[Controller(title: '用户管理')]
+class User
 {
-    #[Node(title: "列表")]
+    #[Node(title: '列表')]
     public function index() {}
 
-    #[Node(title: "新增")]
+    #[Node(title: '新增')]
     public function add() {}
 
-    #[Node(title: "编辑")]
-    public function edit() {}
-}
-```
+    #[Node(title: '删除', is_auth: false)]
+    public function delete() {}
 
-**旧版 DocBlock 方式（兼容现有代码，零改动）：**
-
-```php
-<?php
-namespace app\admin\controller;
-
-/**
- * @ControllerAnnotation(title="管理员管理")
- */
-class Admin
-{
-    /**
-     * @NodeAnotation(title="列表")
-     */
-    public function index() {}
-
-    /**
-     * @NodeAnotation(title="新增")
-     */
-    public function add() {}
+    // 无注解的方法不会被识别为节点
+    public function _initialize() {}
 }
 ```
 
 ### 2. 扫描控制器
 
-**方式一：单路径扫描（Scanner）**
-
 ```php
-<?php
 use Mycm\Annotations\Scanner;
 
 $scanner = new Scanner();
-$controllers = $scanner->scan('/path/to/your/controller/directory');
+$controllers = $scanner->scan('/path/to/controller', [
+    'namespace_prefix' => 'app\admin\controller',
+]);
 
 foreach ($controllers as $ctrl) {
-    echo $ctrl->title;          // "管理员管理"
-    echo $ctrl->className;      // "app\admin\controller\Admin"
-    echo $ctrl->filePath;       // 文件绝对路径
-
+    echo $ctrl->title;           // "用户管理"
+    echo $ctrl->className;       // "app\admin\controller\User"
     foreach ($ctrl->nodes as $node) {
-        echo $node->title;       // "列表"
-        echo $node->methodName;  // "index"
+        echo $node->title;       // "列表" / "新增" / "删除"
+        echo $node->isAuth;      // true / false
+        echo $node->getNode();   // "app/admin/controller/User/index"
     }
 }
 ```
 
-**方式二：多应用配置扫描（AnnotationManager，推荐）**
-
-支持配置多个应用的控制器路径，一次性扫描所有应用下的控制器和节点，适用于 ThinkPHP 多应用模式（前后台分离管理）。
+### 3. 获取扁平节点列表
 
 ```php
-<?php
+$nodes = $scanner->getAllNodes();
+// 返回包含控制器节点（type=1）和方法节点（type=2）的统一数组
+foreach ($nodes as $node) {
+    $arr = $node->toArray();
+    // ['node' => '...', 'title' => '...', 'is_auth' => true, 'type' => 2, ...]
+}
+```
+
+### 4. 多应用模式（AnnotationManager）
+
+```php
 use Mycm\Annotations\AnnotationManager;
 
 $manager = new AnnotationManager();
+$manager->addApp('admin', '/path/to/admin/controller');
+$manager->addApp('api', '/path/to/api/controller');
 
-// 链式配置多个应用
-$manager
-    ->addApp('admin', app_path('admin/controller'))   // 后台
-    ->addApp('api', app_path('api/controller'))       // API 接口
-    ->addApp('index', app_path('index/controller'));  // 前台
-
-// 或使用 setApps() 批量配置
-// $manager->setApps([
-//     'admin' => app_path('admin/controller'),
-//     'api'   => app_path('api/controller'),
-//     'index' => app_path('index/controller'),
-// ]);
-
-// 扫描所有应用，按应用分组返回
+// 扫描所有应用
 $results = $manager->scanAll();
 
-foreach ($results as $app) {
-    echo $app->appName;              // "admin"
-    echo $app->getTotalControllers(); // 该应用的控制器总数
-    echo $app->getTotalNodes();       // 该应用的节点总数
+// 按应用分组获取节点
+$nodesByApp = $manager->getAllNodesGroupedByApp();
+// ['admin' => [[...], [...]], 'api' => [[...], [...]]]
 
-    foreach ($app->controllers as $ctrl) {
-        echo $ctrl->title;            // "管理员管理"
-        foreach ($ctrl->nodes as $node) {
-            echo $node->title;         // "列表"
-        }
-    }
-}
+// 获取所有控制器扁平列表
+$allControllers = $manager->getAllControllers();
+```
 
-// 或者按应用名获取分组节点（便于直接存入数据库）
-$grouped = $manager->getAllNodesGroupedByApp();
-// 返回：['admin' => [[节点...], ...], 'api' => [[节点...], ...]]
+### 5. 单应用便捷模式
 
-// 扁平化获取所有节点
-$allNodes = $manager->getAllNodes();
-foreach ($allNodes as $node) {
-    // 存入数据库：控制器类名 + 方法名 + 标题 + 所属应用
-}
+```php
+$manager = new AnnotationManager('/path/to/controller');
+$controllers = $manager->scan();
+$nodes = $manager->getNodes();
+$ctrl = $manager->getController('app\admin\controller\User');
 ```
 
 ## API 参考
 
-### Scanner 类
+### Scanner
 
-| 方法 | 返回值 | 说明 |
-|------|--------|------|
-| `scan(string $directory, array $options = [])` | `ControllerInfo[]` | 扫描指定目录，返回所有控制器信息 |
-| `getControllers()` | `ControllerInfo[]` | 获取已扫描的控制器列表 |
-| `getNodes()` | `array<string, NodeInfo[]>` | 按控制器类名分组的节点列表 |
-| `getAllNodes()` | `NodeInfo[]` | 所有节点的扁平列表 |
-| `getController(string $className)` | `ControllerInfo\|null` | 按类名查找单个控制器 |
+| 方法 | 说明 |
+|------|------|
+| `scan(string $directory, array $options = [])` | 扫描目录，返回 `ControllerInfo[]` |
+| `getControllers()` | 获取已扫描的控制器列表 |
+| `getNodes()` | 按类名分组的节点 `array<string, NodeInfo[]>` |
+| `getAllNodes()` | 扁平节点列表（含控制器节点 + 方法节点） |
+| `getController(string $className)` | 按类名查找单个控制器 |
 
-#### scan() 选项
+**Scan 选项：**
 
-```php
-$controllers = $scanner->scan('/path/to/controllers', [
-    'exclude' => ['Abstract*.php', '*Base.php'],  // 排除文件（glob 模式）
-]);
-```
+| 选项 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `namespace_prefix` | string | 命名空间前缀（用于生成旧格式 node 路径） | `''` |
+| `controller_attribute_class` | string | 控制器级 Attribute 类名 | `Mycm\Annotations\Attributes\Controller` |
+| `node_attribute_class` | string | 方法级 Attribute 类名 | `Mycm\Annotations\Attributes\Node` |
+| `auth_field_name` | string | Attribute 中鉴权字段名 | `'is_auth'` |
+| `exclude` | string[] | 排除的文件名 glob 模式 | `[]` |
 
-### AnnotationManager 类（多应用入口）
+### AnnotationManager
 
-| 方法 | 返回值 | 说明 |
-|------|--------|------|
-| `addApp(string $name, string $path)` | `$this` | 链式添加一个应用的控制器路径 |
-| `setApps(array $apps)` | `$this` | 批量设置应用配置（`['name' => 'path', ...]`) |
-| `removeApp(string $name)` | `$this` | 移除某个应用配置 |
-| `getApps()` | `array` | 获取当前已配置的应用列表 |
-| `setScanOptions(array $options)` | `$this` | 设置扫描选项（传递到底层 Scanner） |
-| `scanAll()` | `AppScanResult[]` | 扫描所有已配置的应用 |
-| `scanApp(string $name)` | `AppScanResult\|null` | 扫描单个应用 |
-| `getAllControllers()` | `ControllerInfo[]` | 所有应用的控制器扁平列表 |
-| `getAllNodes()` | `NodeInfo[]` | 所有应用的节点扁平列表 |
-| `getAllNodesGroupedByApp()` | `array` | 按应用名分组的节点信息 |
-| `toArray()` | `array` | 所有结果转数组（支持 JSON 序列化） |
+| 方法 | 说明 |
+|------|------|
+| `scan(?string $path = null)` | 扫描单应用，返回 `ControllerInfo[]` |
+| `getControllers()` | 获取缓存的控制列表 |
+| `getNodes()` | 获取扁平节点列表 |
+| `getController(string $className)` | 按类名查找控制器 |
+| `setAppPath(string $path)` | 设置/切换应用路径 |
+| `addApp(string $name, string $path)` | 添加多应用配置 |
+| `setApps(array $apps)` | 批量设置应用配置 |
+| `scanAll()` | 扫描所有应用，返回 `AppScanResult[]` |
+| `scanApp(string $name)` | 扫描单个已配置的应用 |
+| `getAllControllers()` | 所有应用的控制器扁平列表 |
+| `getAllNodes()` | 所有应用的节点扁平列表 |
+| `getAllNodesGroupedByApp()` | 按应用分组返回节点 |
+| `toArray()` | 转为数组格式 |
+| `setScanOptions(array $options)` | 设置传递给 Scanner 的选项 |
 
-### AppScanResult 实体
+### Attributes
 
-| 属性 | 类型 | 说明 |
-|------|------|------|
-| `appName` | `string` | 应用名称，如 "admin"、"api" |
-| `controllerPath` | `string` | 控制器目录路径 |
-| `controllers` | `ControllerInfo[]` | 该应用下的控制器列表 |
-
-| 方法 | 返回值 | 说明 |
-|------|--------|------|
-| `getTotalControllers()` | `int` | 该应用下控制器数量 |
-| `getTotalNodes()` | `int` | 该应用下节点总数 |
-| `toArray()` | `array` | 转为关联数组 |
-
-### ControllerInfo 实体
-
-| 属性 | 类型 | 说明 |
-|------|------|------|
-| `className` | `string` | 完全限定类名 |
-| `title` | `string` | 控制器标题 |
-| `filePath` | `string` | 文件绝对路径 |
-| `nodes` | `NodeInfo[]` | 该控制器下的节点列表 |
-
-| 方法 | 返回值 | 说明 |
-|------|--------|------|
-| `toArray()` | `array` | 转为关联数组，便于 JSON 序列化 |
-
-### NodeInfo 实体
-
-| 属性 | 类型 | 说明 |
-|------|------|------|
-| `methodName` | `string` | 方法名称 |
-| `title` | `string` | 节点标题 |
-| `controllerClass` | `string` | 所属控制器完全限定类名 |
-
-| 方法 | 返回值 | 说明 |
-|------|--------|------|
-| `toArray()` | `array` | 转为关联数组，便于 JSON 序列化 |
-
-## 与 ThinkPHP 集成示例
+#### Controller
 
 ```php
-<?php
-// 在 ThinkPHP 命令行或定时任务中执行
-use Mycm\Annotations\Scanner;
-
-class ScanControllerNode
+#[Attribute(Attribute::TARGET_CLASS)]
+class Controller
 {
-    public function run()
-    {
-        $scanner = new Scanner();
-        $controllers = $scanner->scan(app_path('controller'));
-
-        foreach ($controllers as $ctrl) {
-            // 保存控制器信息到数据库
-            $ctrlId = Db::name('admin_controller')->insertGetId([
-                'class_name' => $ctrl->className,
-                'title'      => $ctrl->title,
-            ]);
-
-            foreach ($ctrl->nodes as $node) {
-                // 保存节点信息到数据库
-                Db::name('admin_node')->insert([
-                    'controller_id' => $ctrlId,
-                    'method_name'   => $node->methodName,
-                    'title'         => $node->title,
-                ]);
-            }
-        }
-    }
+    public function __construct(
+        public string $title = '',   // 控制器标题
+    ) {}
 }
 ```
 
-## 兼容性说明
+#### Node
 
-| 格式 | PHP 版本 | 说明 |
-|------|----------|------|
-| `#[Controller]` / `#[Node]` | >= 8.0 | PHP 原生 Attribute，推荐使用 |
-| `@ControllerAnnotation` / `@NodeAnotation` | 任意 | DocBlock 格式，向后兼容 |
+```php
+#[Attribute(Attribute::TARGET_METHOD)]
+class Node
+{
+    public function __construct(
+        public string $title = '',     // 节点标题
+        public bool   $is_auth = true, // 是否需要权限验证
+    ) {}
+}
+```
 
-> 如果同时存在两种格式，PHP 8 Attribute 优先级更高。
+### 数据对象
 
-## 参与开发
+#### ControllerInfo
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `className` | string | 完全限定类名 |
+| `title` | string | 控制器标题 |
+| `filePath` | string | 文件路径 |
+| `controllerNode` | string | 旧格式节点路径 |
+| `nodes` | NodeInfo[] | 节点列表 |
+
+方法：`toArray()`, `formatControllerNode(string $className, string $prefix): string`
+
+#### NodeInfo
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `methodName` | string | 方法名 |
+| `title` | string | 节点标题 |
+| `controllerClass` | string | 所属控制器类名 |
+| `isAuth` | bool | 是否需要鉴权 |
+| `type` | int | 1=控制器节点, 2=方法节点 |
+| `controllerNode` | string | 所属控制器的节点路径 |
+
+方法：`getNode(): string`, `toArray(): array`
+
+#### AppScanResult
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `appName` | string | 应用名称 |
+| `controllerPath` | string | 控制器目录路径 |
+| `controllers` | ControllerInfo[] | 控制器列表 |
+
+方法：`getTotalNodes(): int`, `getTotalControllers(): int`, `toArray(): array`
+
+## 运行测试
 
 ```bash
-# 克隆仓库
-git clone https://github.com/your-org/MycmAnnotations.git
-
-# 运行测试
 php tests/run_test.php
 ```
 
-## License
+## 与 EasyAdmin SDK 集成
 
-MIT
+EasyAdmin SDK 通过自定义 PHP 8 Attribute 类（`EasyAdmin\annotation\ControllerAnnotation` / `NodeAnnotation`）配合本扫描器，实现权限节点的自动采集：
+
+```php
+use EasyAdmin\auth\Node;
+
+$node = new Node('/path/to/controller', 'app\admin\controller');
+$node->setAuthFieldName('auth');
+$list = $node->getNodelist();
+// [['node' => '...', 'title' => '...', 'is_auth' => true, 'type' => 2], ...]
+```
+
+## 协议
+
+MIT License

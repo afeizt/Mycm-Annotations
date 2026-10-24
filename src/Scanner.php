@@ -11,7 +11,6 @@ use ReflectionMethod;
 use RegexIterator;
 
 use const T_CLASS;
-use const T_DOC_COMMENT;
 use const T_NAME_FULLY_QUALIFIED;
 use const T_NAME_QUALIFIED;
 use const T_NAMESPACE;
@@ -21,12 +20,11 @@ use const T_WHITESPACE;
 /**
  * 控制器注解扫描器
  *
- * 自动扫描指定目录下的控制器文件，提取控制器注解和节点方法注解。
- * 优先使用 PHP 8 原生 Attribute，自动回退到 DocBlock 格式。
+ * 自动扫描指定目录下的控制器文件，通过 PHP 8 原生 Attribute 提取控制器注解和节点方法注解。
  *
  * 使用示例：
  *   $scanner = new Scanner();
- *   $controllers = $scanner->scan('/path/to/controllers');
+ *   $controllers = $scanner->scan('/path/to/controllers', ['namespace_prefix' => 'app\admin\controller']);
  *   foreach ($controllers as $ctrl) {
  *       echo $ctrl->title;
  *       foreach ($ctrl->nodes as $node) {
@@ -44,14 +42,13 @@ class Scanner
 	private array $controllers = [];
 
 	/**
-	 * DocBlock 解析器实例
+	 * 当前扫描选项
+	 *
+	 * @var array<string, mixed>
 	 */
-	private DocBlockParser $docBlockParser;
+	private array $options = [];
 
-	public function __construct()
-	{
-		$this->docBlockParser = new DocBlockParser();
-	}
+	public function __construct() {}
 
 	/**
 	 * 扫描指定目录下的所有控制器
@@ -60,22 +57,29 @@ class Scanner
 	 *
 	 * @param string $directory 要扫描的控制器目录绝对路径
 	 * @param array  $options   扫描选项
-	 *                          - 'exclude'  string[] 排除的文件名模式（glob）
-	 *                          - 'base_namespace' string 基础命名空间，用于拼接完整类名
+	 *                          - 'exclude'                  string[] 排除的文件名模式（glob）
+	 *                          - 'base_namespace'           string   基础命名空间，用于拼接完整类名
+	 *                          - 'namespace_prefix'         string   旧版 EasyAdmin 兼容的命名空间前缀
+	 *                                                               用于剥离前缀生成旧格式 node 路径
+	 *                          - 'controller_attribute_class' string  控制器级 PHP 8 Attribute 类名，默认 Mycm\Annotations\Attributes\Controller
+	 *                          - 'node_attribute_class'      string  方法级 PHP 8 Attribute 类名，默认 Mycm\Annotations\Attributes\Node
+	 *                          - 'auth_field_name'            string  Attribute 中鉴权字段名，默认 'is_auth'（EasyAdmin 传 'auth'）
 	 * @return ControllerInfo[] 扫描到的控制器信息列表
 	 */
 	public function scan(string $directory, array $options = []): array
 	{
 		$this->controllers = [];
+		$this->options = $options;
 
 		if (! is_dir($directory)) {
 			return [];
 		}
 
+		$namespacePrefix = $options['namespace_prefix'] ?? '';
 		$files = $this->findPhpFiles($directory, $options['exclude'] ?? []);
 
 		foreach ($files as $filePath) {
-			$controller = $this->processFile($filePath);
+			$controller = $this->processFile($filePath, $namespacePrefix);
 			if ($controller !== null) {
 				$this->controllers[] = $controller;
 			}
@@ -109,7 +113,7 @@ class Scanner
 	}
 
 	/**
-	 * 获取所有节点的扁平列表
+	 * 获取所有节点的扁平列表（包含控制器节点 type=1 和方法节点 type=2）
 	 *
 	 * @return NodeInfo[]
 	 */
@@ -117,6 +121,18 @@ class Scanner
 	{
 		$nodes = [];
 		foreach ($this->controllers as $controller) {
+			// 添加控制器级节点（type=1）
+			if ($controller->controllerNode !== '') {
+				$nodes[] = new NodeInfo(
+					methodName: '',
+					title: $controller->title,
+					controllerClass: $controller->className,
+					isAuth: true,
+					type: 1,
+					controllerNode: $controller->controllerNode,
+				);
+			}
+			// 添加方法级节点（type=2）
 			foreach ($controller->nodes as $node) {
 				$nodes[] = $node;
 			}
@@ -185,10 +201,11 @@ class Scanner
 	/**
 	 * 处理单个 PHP 文件，尝试提取控制器信息
 	 *
-	 * @param string $filePath 文件绝对路径
+	 * @param string $filePath        文件绝对路径
+	 * @param string $namespacePrefix 旧版兼容的命名空间前缀
 	 * @return ControllerInfo|null
 	 */
-	private function processFile(string $filePath): ?ControllerInfo
+	private function processFile(string $filePath, string $namespacePrefix = ''): ?ControllerInfo
 	{
 		// 1. 从文件内容解析类信息（不执行文件）
 		$classInfo = $this->extractClassInfo($filePath);
@@ -202,11 +219,11 @@ class Scanner
 		$reflectionClass = $this->safeReflect($className);
 
 		if ($reflectionClass !== null) {
-			return $this->processByReflection($reflectionClass, $filePath);
+			return $this->processByReflection($reflectionClass, $filePath, $namespacePrefix);
 		}
 
-		// 3. 反射失败，使用文件内容直接解析 DocBlock（仅兼容旧版格式）
-		return $this->processByFileContent($classInfo, $filePath);
+		// 3. 反射失败，无法读取 Attribute，返回 null
+		return null;
 	}
 
 	/**
@@ -240,36 +257,37 @@ class Scanner
 	 *
 	 * @param ReflectionClass $reflectionClass 反射类
 	 * @param string          $filePath        文件路径
+	 * @param string          $namespacePrefix 旧版兼容的命名空间前缀
 	 * @return ControllerInfo|null
 	 */
-	private function processByReflection(ReflectionClass $reflectionClass, string $filePath): ?ControllerInfo
+	private function processByReflection(ReflectionClass $reflectionClass, string $filePath, string $namespacePrefix = ''): ?ControllerInfo
 	{
 		$className = $reflectionClass->getName();
 
-		// 1. 优先读取 PHP 8 Attribute
+		// 1. 读取 PHP 8 Attribute
 		$title = $this->getAttributeTitle($reflectionClass);
 
-		// 2. Attribute 未找到时回退到 DocBlock
+		// 2. 无 Attribute 则不是控制器
 		if ($title === null) {
-			$docComment = $reflectionClass->getDocComment();
-			$legacyData = $docComment ? $this->docBlockParser->parseControllerAnnotation($docComment) : null;
-			if ($legacyData === null) {
-				return null; // 不是控制器
-			}
-			$title = $legacyData['title'] ?? '';
+			return null;
 		}
 
-		// 3. 扫描节点方法
+		// 3. 计算旧版兼容的控制器节点路径
+		$controllerNode = $namespacePrefix !== ''
+			? ControllerInfo::formatControllerNode($className, $namespacePrefix)
+			: '';
+
+		// 4. 扫描节点方法
 		$nodes = [];
 		$methods = $reflectionClass->getMethods(ReflectionMethod::IS_PUBLIC);
 
 		foreach ($methods as $method) {
-			// 跳过魔术方法和继承自父类的方法
+			// 跳过魔术方法
 			if (str_starts_with($method->getName(), '__')) {
 				continue;
 			}
 
-			$nodeInfo = $this->processMethodByReflection($method, $className);
+			$nodeInfo = $this->processMethodByReflection($method, $className, $controllerNode);
 			if ($nodeInfo !== null) {
 				$nodes[] = $nodeInfo;
 			}
@@ -279,19 +297,21 @@ class Scanner
 			className: $className,
 			title: $title,
 			filePath: $filePath,
-			nodes: $nodes
+			nodes: $nodes,
+			controllerNode: $controllerNode
 		);
 	}
 
 	/**
-	 * 从反射类中读取 PHP 8 #[Controller] Attribute 的 title
+	 * 从反射类中读取 PHP 8 Attribute 的 title
 	 *
 	 * @param ReflectionClass $reflectionClass
 	 * @return string|null
 	 */
 	private function getAttributeTitle(ReflectionClass $reflectionClass): ?string
 	{
-		$attributes = $reflectionClass->getAttributes(Controller::class);
+		$attributeClass = $this->options['controller_attribute_class'] ?? Controller::class;
+		$attributes = $reflectionClass->getAttributes($attributeClass);
 
 		if (empty($attributes)) {
 			return null;
@@ -304,146 +324,66 @@ class Scanner
 	/**
 	 * 通过反射处理方法，提取节点信息
 	 *
-	 * @param ReflectionMethod $method     反射方法
-	 * @param string           $className  所属控制器类名
+	 * @param ReflectionMethod $method         反射方法
+	 * @param string           $className      所属控制器类名
+	 * @param string           $controllerNode 旧版兼容的控制器节点路径
 	 * @return NodeInfo|null
 	 */
-	private function processMethodByReflection(ReflectionMethod $method, string $className): ?NodeInfo
+	private function processMethodByReflection(ReflectionMethod $method, string $className, string $controllerNode = ''): ?NodeInfo
 	{
 		$methodName = $method->getName();
 
-		// 1. 优先读取 PHP 8 Attribute
+		// 1. 读取 PHP 8 Attribute
 		$nodeData = $this->getMethodAttributeData($method);
 
-		// 2. Attribute 未找到时回退到 DocBlock
+		// 2. 无 Attribute 则不是节点
 		if ($nodeData === null) {
-			$docComment = $method->getDocComment();
-			$legacyData = $docComment ? $this->docBlockParser->parseNodeAnnotation($docComment) : null;
-			if ($legacyData === null) {
-				return null;
-			}
-			$title  = $legacyData['title'] ?? '';
-			$isAuth = $legacyData['is_auth'] ?? true;
-		} else {
-			$title  = $nodeData['title'];
-			$isAuth = $nodeData['is_auth'];
+			return null;
 		}
+
+		$title  = $nodeData['title'];
+		$isAuth = $nodeData['is_auth'];
 
 		return new NodeInfo(
 			methodName: $methodName,
 			title: $title,
 			controllerClass: $className,
 			isAuth: $isAuth,
+			type: 2,
+			controllerNode: $controllerNode,
 		);
 	}
 
 	/**
-	 * 从反射方法中读取 PHP 8 #[Node] Attribute 的完整数据
+	 * 从反射方法中读取 PHP 8 Attribute 的完整数据
 	 *
 	 * @param ReflectionMethod $method
 	 * @return array{title: string, is_auth: bool}|null
 	 */
 	private function getMethodAttributeData(ReflectionMethod $method): ?array
 	{
-		$attributes = $method->getAttributes(Node::class);
+		$attributeClass = $this->options['node_attribute_class'] ?? Node::class;
+		$attributes = $method->getAttributes($attributeClass);
 
 		if (empty($attributes)) {
 			return null;
 		}
 
 		$instance = $attributes[0]->newInstance();
+		$authFieldName = $this->options['auth_field_name'] ?? 'is_auth';
 		return [
 			'title'   => $instance->title,
-			'is_auth' => $instance->is_auth,
+			'is_auth' => $instance->$authFieldName ?? true,
 		];
 	}
 
 	/**
-	 * 通过文件内容直接解析（无反射时的回退方案，仅支持旧版 DocBlock 格式）
-	 *
-	 * @param array  $classInfo extractClassInfo() 的返回结果
-	 * @param string $filePath  文件路径
-	 * @return ControllerInfo|null
-	 */
-	private function processByFileContent(array $classInfo, string $filePath): ?ControllerInfo
-	{
-		$content = file_get_contents($filePath);
-		if ($content === false) {
-			return null;
-		}
-
-		$className = $classInfo['full_class'];
-
-		// 尝试从内容中提取类级 DocBlock
-		$classDocComment = $classInfo['doc_comment'] ?? '';
-		$legacyData = $classDocComment
-			? $this->docBlockParser->parseControllerAnnotation($classDocComment)
-			: null;
-
-		if ($legacyData === null) {
-			return null;
-		}
-
-		// 该类是控制器，尝试解析方法级 DocBlock
-		$nodes = $this->extractMethodAnnotationsFromContent($content, $className);
-
-		return new ControllerInfo(
-			className: $className,
-			title: $legacyData['title'] ?? '',
-			filePath: $filePath,
-			nodes: $nodes
-		);
-	}
-
-	/**
-	 * 从文件内容中提取方法级的 @NodeAnotation
-	 *
-	 * @param string $content   文件内容
-	 * @param string $className 控制器类名
-	 * @return NodeInfo[]
-	 */
-	private function extractMethodAnnotationsFromContent(string $content, string $className): array
-	{
-		$nodes = [];
-
-		// 匹配方法声明及其前面的 DocBlock
-		$pattern = '/
-            (\/\*\*.*?\*\/)\s*               # DocBlock (group 1)
-            (?:public|protected|private)?\s*  # 可选访问修饰符
-            function\s+(\w+)\s*\(             # function methodName(
-        /sx';
-
-		if (preg_match_all($pattern, $content, $matches, PREG_SET_ORDER)) {
-			foreach ($matches as $match) {
-				$docComment = $match[1];
-				$methodName = $match[2];
-
-				if (str_starts_with($methodName, '__')) {
-					continue;
-				}
-
-				$legacyData = $this->docBlockParser->parseNodeAnnotation($docComment);
-				if ($legacyData !== null) {
-					$nodes[] = new NodeInfo(
-						methodName: $methodName,
-						title: $legacyData['title'] ?? '',
-						controllerClass: $className,
-						isAuth: $legacyData['is_auth'] ?? true,
-					);
-				}
-			}
-		}
-
-		return $nodes;
-	}
-
-	/**
-	 * 从 PHP 文件内容中提取命名空间、类名和 DocComment
+	 * 从 PHP 文件内容中提取命名空间和类名
 	 *
 	 * 使用 PHP 内置 tokenizer，不执行文件代码。
 	 *
 	 * @param string $filePath 文件绝对路径
-	 * @return array{namespace: string, class: string, full_class: string, doc_comment: string}|null
+	 * @return array{namespace: string, class: string, full_class: string}|null
 	 */
 	private function extractClassInfo(string $filePath): ?array
 	{
@@ -456,7 +396,6 @@ class Scanner
 
 		$namespace  = '';
 		$className  = '';
-		$docComment = '';
 
 		$tokenCount = count($tokens);
 		for ($i = 0; $i < $tokenCount; $i++) {
@@ -471,26 +410,12 @@ class Scanner
 				$namespace = $this->extractNamespace($tokens, $i, $tokenCount);
 			}
 
-			// 记录 DocComment（类声明前面的最后一个注释）
-			if ($token[0] === T_DOC_COMMENT) {
-				$docComment = $token[1];
-			}
-
 			// 解析类名
 			if ($token[0] === T_CLASS) {
 				$className = $this->extractClassName($tokens, $i, $tokenCount);
 				if ($className !== '') {
 					break; // 找到第一个类就退出
 				}
-			}
-
-			// 非 DocComment 的 token 清除之前的 docComment（如 T_WHITESPACE 不会触发，但属性注解等会）
-			if ($token[0] !== T_DOC_COMMENT && $token[0] !== T_WHITESPACE) {
-				// 仅在遇到 Attribute 时清除，保留对 docComment 的跟踪
-				// 这里我们简单地在遇到非注释、非空白 token 时检查是否可能是中间的代码
-				// 为了简化：只在遇到 T_CLASS 声明之前遇到的最后一个 T_DOC_COMMENT 有效
-				// 如果之后遇到了非 T_DOC_COMMENT 且非 T_WHITESPACE 且非 T_CLASS 的 token（如 T_ATTRIBUTE），
-				// 且它不是一个类声明相关的 token，则之前的 docComment 不属于类
 			}
 		}
 
@@ -502,7 +427,6 @@ class Scanner
 			'namespace'   => $namespace,
 			'class'       => $className,
 			'full_class'  => $namespace ? $namespace . '\\' . $className : $className,
-			'doc_comment' => $docComment,
 		];
 	}
 
