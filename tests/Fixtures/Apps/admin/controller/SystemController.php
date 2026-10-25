@@ -1,5 +1,13 @@
 <?php
 
+/**
+ * MyCm Annotations
+ *
+ * @author   afeizt@hotmail.com
+ * @license  MIT https://mit-license.org
+ * @link     https://github.com/afeizt/mycm-annotations
+ */
+
 namespace Mycm\Annotations\Tests\Fixtures\Apps\admin\controller;
 
 use Mycm\Annotations\Attributes\Controller;

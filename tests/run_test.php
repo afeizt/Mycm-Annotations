@@ -1,6 +1,14 @@
 <?php
 
 /**
+ * MyCm Annotations
+ *
+ * @author   afeizt@hotmail.com
+ * @license  MIT https://mit-license.org
+ * @link     https://github.com/afeizt/mycm-annotations
+ */
+
+/**
  * 集成测试 - 验证 controller-annotation 库的完整功能
  *
  * 测试内容：
