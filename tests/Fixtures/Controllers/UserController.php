@@ -24,7 +24,7 @@ class UserController
 	#[Node(title: '用户列表')]
 	public function index(): void {}
 
-	#[Node(title: '添加用户', is_auth: false)]
+	#[Node(title: '添加用户', auth: false)]
 	public function add(): void {}
 
 	#[Node(title: '编辑用户')]

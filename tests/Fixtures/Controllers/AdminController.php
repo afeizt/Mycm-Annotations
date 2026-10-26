@@ -22,7 +22,7 @@ class AdminController
 	#[Node(title: '新增')]
 	public function add(): void {}
 
-	#[Node(title: '删除', is_auth: false)]
+	#[Node(title: '删除', auth: false)]
 	public function delete(): void {}
 
 	public function _before_index(): void {}

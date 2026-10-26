@@ -13,8 +13,11 @@ namespace Mycm\Annotations;
 /**
  * 节点信息实体
  *
- * 表示控制器中单个方法节点的元数据，包含节点路径、标题、鉴权标记等。
+ * 表示控制器中单个方法节点的元数据，包含节点路径、标题、原始鉴权标记等。
  * 同时支持控制器级节点（type=1）和方法级节点（type=2）。
+ *
+ * rawAuth 存储注解中 auth 属性的原始值（bool 或 array），
+ * 不做任何语义解析，由上层调用方（EasyAdmin SDK）负责解释。
  */
 class NodeInfo
 {
@@ -24,8 +27,13 @@ class NodeInfo
 	public string $title;
 	/** 所属控制器完全限定类名 */
 	public string $controllerClass;
-	/** 是否需要权限验证 */
-	public bool $isAuth;
+	/**
+	 * 原始鉴权标记（注解 auth 字段的原始值）
+	 *
+	 * 可能为 bool（auth: true/false）或 array（auth: ['login' => true, 'rbac' => false]）。
+	 * 由上层 SDK 调用 AuthConfig::resolve() 解析。
+	 */
+	public mixed $rawAuth;
 	/** 节点类型：1=控制器级节点，2=方法级节点 */
 	public int $type;
 	/** 旧版兼容的控制器节点路径（如 "system.admin"） */
@@ -35,14 +43,14 @@ class NodeInfo
 		string $methodName = '',
 		string $title = '',
 		string $controllerClass = '',
-		bool   $isAuth = true,
+		mixed  $rawAuth = true,
 		int    $type = 2,
 		string $controllerNode = '',
 	) {
 		$this->methodName      = $methodName;
 		$this->title           = $title;
 		$this->controllerClass = $controllerClass;
-		$this->isAuth          = $isAuth;
+		$this->rawAuth         = $rawAuth;
 		$this->type            = $type;
 		$this->controllerNode  = $controllerNode;
 	}
@@ -70,7 +78,7 @@ class NodeInfo
 		return [
 			'node'             => $this->getNode(),
 			'title'            => $this->title,
-			'is_auth'          => $this->isAuth,
+			'raw_auth'         => $this->rawAuth,
 			'type'             => $this->type,
 			'method_name'      => $this->methodName,
 			'controller_class' => $this->controllerClass,

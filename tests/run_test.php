@@ -133,40 +133,40 @@ foreach ($configCtrl->nodes as $node) {
 	}
 }
 
-// 测试 NodeInfo.isAuth 和 NodeInfo.getNode()
-echo "\n[Test 6b] NodeInfo isAuth 与 getNode()\n";
+// 测试 NodeInfo.rawAuth 和 NodeInfo.getNode()
+echo "\n[Test 6b] NodeInfo rawAuth 与 getNode()\n";
 echo "----------------------------------------\n";
 $userCtrl = $scanner->getController('Mycm\Annotations\Tests\Fixtures\Controllers\UserController');
 foreach ($userCtrl->nodes as $node) {
 	if ($node->methodName === 'index') {
 		printf("index: getNode() = [%s]\n", $node->getNode());
-		printf("index: isAuth = %s (期望: true)\n", $node->isAuth ? 'true' : 'false');
+		printf("index: rawAuth = %s (期望: true)\n", var_export($node->rawAuth, true));
 	}
 	if ($node->methodName === 'add') {
-		printf("add: isAuth = %s (期望: false, Attribute is_auth: false)\n", $node->isAuth ? 'true' : 'false');
+		printf("add: rawAuth = %s (期望: false, Attribute auth: false)\n", var_export($node->rawAuth, true));
 	}
 }
 
 $adminCtrl2 = $scanner->getController('Mycm\Annotations\Tests\Fixtures\Controllers\AdminController');
 foreach ($adminCtrl2->nodes as $node) {
 	if ($node->methodName === 'delete') {
-		printf("delete: isAuth = %s (期望: false, Attribute is_auth: false)\n", $node->isAuth ? 'true' : 'false');
+		printf("delete: rawAuth = %s (期望: false, Attribute auth: false)\n", var_export($node->rawAuth, true));
 	}
 	if ($node->methodName === 'index') {
-		printf("index: isAuth = %s (期望: true, 默认值)\n", $node->isAuth ? 'true' : 'false');
+		printf("index: rawAuth = %s (期望: true, 默认值)\n", var_export($node->rawAuth, true));
 	}
 }
 
-// 测试 NodeInfo.toArray() 包含 node 和 is_auth
+// 测试 NodeInfo.toArray() 包含 node 和 raw_auth
 echo "\n[Test 6c] NodeInfo.toArray() 兼容格式\n";
 echo "----------------------------------------\n";
 $firstNode = $userCtrl->nodes[0];
 $arr = $firstNode->toArray();
 printf("node     = %s\n", $arr['node']);
 printf("title    = %s\n", $arr['title']);
-printf("is_auth  = %s\n", $arr['is_auth'] ? 'true' : 'false');
+printf("raw_auth = %s\n", var_export($arr['raw_auth'], true));
 printf("包含 'node' 字段: %s\n", isset($arr['node']) ? '✓' : '✗');
-printf("包含 'is_auth' 字段: %s\n", isset($arr['is_auth']) ? '✓' : '✗');
+printf("包含 'raw_auth' 字段: %s\n", isset($arr['raw_auth']) ? '✓' : '✗');
 
 // ==============================================================
 // AnnotationManager 多应用扫描测试

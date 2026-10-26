@@ -38,6 +38,13 @@ class ControllerInfo
 	public string $controllerNode;
 
 	/**
+	 * 控制器级注解中 auth 字段的原始值
+	 *
+	 * 不解析语义，透传给上层 SDK 处理。
+	 */
+	public mixed $rawAuth;
+
+	/**
 	 * 该控制器下的节点列表
 	 *
 	 * @var NodeInfo[]
@@ -50,19 +57,22 @@ class ControllerInfo
 	 * @param string      $filePath       文件路径
 	 * @param NodeInfo[]  $nodes          节点列表
 	 * @param string      $controllerNode 旧版兼容的控制器节点路径
+	 * @param mixed       $rawAuth        原始鉴权标记
 	 */
 	public function __construct(
 		string $className = '',
 		string $title = '',
 		string $filePath = '',
 		array $nodes = [],
-		string $controllerNode = ''
+		string $controllerNode = '',
+		mixed  $rawAuth = true,
 	) {
 		$this->className      = $className;
 		$this->title          = $title;
 		$this->filePath       = $filePath;
 		$this->nodes          = $nodes;
 		$this->controllerNode = $controllerNode;
+		$this->rawAuth         = $rawAuth;
 	}
 
 	/**
@@ -122,6 +132,7 @@ class ControllerInfo
 			'title'           => $this->title,
 			'file_path'       => $this->filePath,
 			'controller_node' => $this->controllerNode,
+			'raw_auth'        => $this->rawAuth,
 			'nodes'           => array_map(fn(NodeInfo $node) => $node->toArray(), $this->nodes),
 		];
 	}

@@ -282,7 +282,7 @@ class AnnotationManager
 					$appNodes[] = [
 						'node'             => $node->getNode(),
 						'title'            => $node->title,
-						'is_auth'          => $node->isAuth,
+						'raw_auth'         => $node->rawAuth,
 						'method_name'      => $node->methodName,
 						'controller_class' => $controller->className,
 						'controller_title' => $controller->title,

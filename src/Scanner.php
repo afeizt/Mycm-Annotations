@@ -56,7 +56,42 @@ class Scanner
 	 */
 	private array $options = [];
 
+	/**
+	 * 缓存目录路径，null 表示不启用缓存
+	 */
+	private ?string $cachePath = null;
+
+	/**
+	 * 调试模式，true 时跳过缓存强制重新扫描
+	 */
+	private bool $debug = false;
+
 	public function __construct() {}
+
+	/**
+	 * 设置缓存目录路径
+	 *
+	 * 启用后扫描结果会序列化到该目录，后续扫描命中缓存时跳过全量反射。
+	 * 缓存文件在目录内 PHP 文件 mtime 变更后自动失效。
+	 *
+	 * @param string|null $path 缓存目录绝对路径，传 null 关闭缓存
+	 */
+	public function setCachePath(?string $path): self
+	{
+		$this->cachePath = $path;
+		return $this;
+	}
+
+	/**
+	 * 设置调试模式
+	 *
+	 * 调试模式下始终全量扫描，不读取缓存。
+	 */
+	public function setDebug(bool $debug): self
+	{
+		$this->debug = $debug;
+		return $this;
+	}
 
 	/**
 	 * 扫描指定目录下的所有控制器
@@ -71,7 +106,7 @@ class Scanner
 	 *                                                               用于剥离前缀生成旧格式 node 路径
 	 *                          - 'controller_attribute_class' string  控制器级 PHP 8 Attribute 类名，默认 Mycm\Annotations\Attributes\Controller
 	 *                          - 'node_attribute_class'      string  方法级 PHP 8 Attribute 类名，默认 Mycm\Annotations\Attributes\Node
-	 *                          - 'auth_field_name'            string  Attribute 中鉴权字段名，默认 'is_auth'（EasyAdmin 传 'auth'）
+	 *                          - 'auth_field_name'            string  Attribute 中鉴权字段名，默认 'auth'
 	 * @return ControllerInfo[] 扫描到的控制器信息列表
 	 */
 	public function scan(string $directory, array $options = []): array
@@ -83,6 +118,17 @@ class Scanner
 			return [];
 		}
 
+		$cachePath = $options['cache_path'] ?? $this->cachePath;
+		$debug     = $options['debug'] ?? $this->debug;
+
+		if ($cachePath !== null && ! $debug) {
+			$cached = $this->loadFromCache($cachePath, $directory, $options);
+			if ($cached !== null) {
+				$this->controllers = $cached;
+				return $cached;
+			}
+		}
+
 		$namespacePrefix = $options['namespace_prefix'] ?? '';
 		$files = $this->findPhpFiles($directory, $options['exclude'] ?? []);
 
@@ -91,6 +137,10 @@ class Scanner
 			if ($controller !== null) {
 				$this->controllers[] = $controller;
 			}
+		}
+
+		if ($cachePath !== null) {
+			$this->saveToCache($cachePath, $directory, $options, $this->controllers);
 		}
 
 		return $this->controllers;
@@ -129,18 +179,16 @@ class Scanner
 	{
 		$nodes = [];
 		foreach ($this->controllers as $controller) {
-			// 添加控制器级节点（type=1）
 			if ($controller->controllerNode !== '') {
 				$nodes[] = new NodeInfo(
 					methodName: '',
 					title: $controller->title,
 					controllerClass: $controller->className,
-					isAuth: true,
+					rawAuth: $controller->rawAuth,
 					type: 1,
 					controllerNode: $controller->controllerNode,
 				);
 			}
-			// 添加方法级节点（type=2）
 			foreach ($controller->nodes as $node) {
 				$nodes[] = $node;
 			}
@@ -272,25 +320,23 @@ class Scanner
 	{
 		$className = $reflectionClass->getName();
 
-		// 1. 读取 PHP 8 Attribute
-		$title = $this->getAttributeTitle($reflectionClass);
+		$classData = $this->getClassAttributeData($reflectionClass);
 
-		// 2. 无 Attribute 则不是控制器
-		if ($title === null) {
+		if ($classData === null) {
 			return null;
 		}
 
-		// 3. 计算旧版兼容的控制器节点路径
+		$title   = $classData['title'];
+		$rawAuth = $classData['raw_auth'];
+
 		$controllerNode = $namespacePrefix !== ''
 			? ControllerInfo::formatControllerNode($className, $namespacePrefix)
 			: '';
 
-		// 4. 扫描节点方法
 		$nodes = [];
 		$methods = $reflectionClass->getMethods(ReflectionMethod::IS_PUBLIC);
 
 		foreach ($methods as $method) {
-			// 跳过魔术方法
 			if (str_starts_with($method->getName(), '__')) {
 				continue;
 			}
@@ -306,17 +352,20 @@ class Scanner
 			title: $title,
 			filePath: $filePath,
 			nodes: $nodes,
-			controllerNode: $controllerNode
+			controllerNode: $controllerNode,
+			rawAuth: $rawAuth,
 		);
 	}
 
 	/**
-	 * 从反射类中读取 PHP 8 Attribute 的 title
+	 * 从反射类中读取 PHP 8 Attribute 的 title 与原始 auth 值
+	 *
+	 * 不解析 auth 值的语义（bool/array），仅透传原始值给调用方处理。
 	 *
 	 * @param ReflectionClass $reflectionClass
-	 * @return string|null
+	 * @return array{title: string, raw_auth: mixed}|null
 	 */
-	private function getAttributeTitle(ReflectionClass $reflectionClass): ?string
+	private function getClassAttributeData(ReflectionClass $reflectionClass): ?array
 	{
 		$attributeClass = $this->options['controller_attribute_class'] ?? Controller::class;
 		$attributes = $reflectionClass->getAttributes($attributeClass);
@@ -326,7 +375,17 @@ class Scanner
 		}
 
 		$instance = $attributes[0]->newInstance();
-		return $instance->title !== '' ? $instance->title : null;
+		$authFieldName = $this->options['auth_field_name'] ?? 'auth';
+		$title = $instance->title;
+
+		if ($title === '') {
+			return null;
+		}
+
+		return [
+			'title'    => $title,
+			'raw_auth' => $instance->$authFieldName ?? true,
+		];
 	}
 
 	/**
@@ -341,32 +400,32 @@ class Scanner
 	{
 		$methodName = $method->getName();
 
-		// 1. 读取 PHP 8 Attribute
 		$nodeData = $this->getMethodAttributeData($method);
 
-		// 2. 无 Attribute 则不是节点
 		if ($nodeData === null) {
 			return null;
 		}
 
-		$title  = $nodeData['title'];
-		$isAuth = $nodeData['is_auth'];
+		$title   = $nodeData['title'];
+		$rawAuth = $nodeData['raw_auth'];
 
 		return new NodeInfo(
 			methodName: $methodName,
 			title: $title,
 			controllerClass: $className,
-			isAuth: $isAuth,
+			rawAuth: $rawAuth,
 			type: 2,
 			controllerNode: $controllerNode,
 		);
 	}
 
 	/**
-	 * 从反射方法中读取 PHP 8 Attribute 的完整数据
+	 * 从反射方法中读取 PHP 8 Attribute 的 title 与原始 auth 值
+	 *
+	 * 不解析 raw_auth 值，仅透传。由上层调用方（如 EasyAdmin SDK）决定如何解释。
 	 *
 	 * @param ReflectionMethod $method
-	 * @return array{title: string, is_auth: bool}|null
+	 * @return array{title: string, raw_auth: mixed}|null
 	 */
 	private function getMethodAttributeData(ReflectionMethod $method): ?array
 	{
@@ -378,10 +437,10 @@ class Scanner
 		}
 
 		$instance = $attributes[0]->newInstance();
-		$authFieldName = $this->options['auth_field_name'] ?? 'is_auth';
+		$authFieldName = $this->options['auth_field_name'] ?? 'auth';
 		return [
-			'title'   => $instance->title,
-			'is_auth' => $instance->$authFieldName ?? true,
+			'title'    => $instance->title,
+			'raw_auth' => $instance->$authFieldName ?? true,
 		];
 	}
 
@@ -529,10 +588,91 @@ class Scanner
 				return $classToken[1];
 			}
 
-			// T_STRING 之前的非空白 token 不是类名
 			break;
 		}
 
 		return '';
+	}
+
+	// ======================== 缓存方法 ========================
+
+	/**
+	 * 从缓存加载扫描结果
+	 *
+	 * 缓存 key 由目录路径 + 扫描选项联合 hash 生成，选项不同时不命中。
+	 * 通过比较缓存文件 mtime 与目录内 PHP 文件最大 mtime 判断缓存是否过期。
+	 *
+	 * @param string $cachePath 缓存目录
+	 * @param string $directory 扫描目录
+	 * @param array  $options   扫描选项（参与 key 计算）
+	 * @return ControllerInfo[]|null
+	 */
+	private function loadFromCache(string $cachePath, string $directory, array $options): ?array
+	{
+		$cacheFile = $this->getCacheFile($cachePath, $directory, $options);
+		if (! file_exists($cacheFile)) {
+			return null;
+		}
+
+		$maxMtime = $this->getDirectoryMaxMtime($directory);
+		if (filemtime($cacheFile) < $maxMtime) {
+			return null;
+		}
+
+		$data = @unserialize(file_get_contents($cacheFile));
+		return is_array($data) ? $data : null;
+	}
+
+	/**
+	 * 保存扫描结果到缓存
+	 *
+	 * @param string           $cachePath   缓存目录
+	 * @param string           $directory   扫描目录
+	 * @param array            $options     扫描选项（参与 key 计算）
+	 * @param ControllerInfo[] $controllers 扫描结果
+	 */
+	private function saveToCache(string $cachePath, string $directory, array $options, array $controllers): void
+	{
+		$cacheFile = $this->getCacheFile($cachePath, $directory, $options);
+		$dir = dirname($cacheFile);
+		if (! is_dir($dir)) {
+			@mkdir($dir, 0755, true);
+		}
+		file_put_contents($cacheFile, serialize($controllers));
+	}
+
+	/**
+	 * 获取缓存文件路径
+	 *
+	 * 文件名由目录路径 + 扫描选项 hash 生成，避免不同项目/选项间的缓存污染。
+	 */
+	private function getCacheFile(string $cachePath, string $directory, array $options): string
+	{
+		$key = md5(serialize([
+			'directory'                => $directory,
+			'namespace_prefix'         => $options['namespace_prefix'] ?? '',
+			'controller_attribute_class' => $options['controller_attribute_class'] ?? '',
+			'node_attribute_class'     => $options['node_attribute_class'] ?? '',
+			'auth_field_name'          => $options['auth_field_name'] ?? '',
+		]));
+		return rtrim($cachePath, '/\\') . "/scanner_{$key}.cache";
+	}
+
+	/**
+	 * 获取目录下所有 PHP 文件的最大 mtime
+	 *
+	 * 用于判断缓存是否过期：任何 PHP 文件修改后缓存自动失效。
+	 */
+	private function getDirectoryMaxMtime(string $directory): int
+	{
+		$maxMtime = 0;
+		$files = $this->findPhpFiles($directory);
+		foreach ($files as $filePath) {
+			$mtime = filemtime($filePath);
+			if ($mtime > $maxMtime) {
+				$maxMtime = $mtime;
+			}
+		}
+		return $maxMtime;
 	}
 }
